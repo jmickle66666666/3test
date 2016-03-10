@@ -1,0 +1,517 @@
+<html><head><style>
+			body { margin: 0; }
+			canvas { width: 100%; height: 100% }
+            #fileSpan { display: none; }
+		</style><title>3d tests</title></head>
+        <body onkeydown="keyDown(event)" onkeyup="keyUp(event)">
+        <span id="fileSpan"><button onClick="hideLoader()">X</button><input type="file" id="fileInput"></span>
+<script src="three.min.js"></script>
+
+<script>
+
+///////////////////////////////////// SET UP
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
+var renderer = new THREE.WebGLRenderer();
+var mouseLastX = 0;
+var mouseLastY = 0;
+function rotateAroundWorldAxis(object, axis, radians) {
+    var rotationMatrix = new THREE.Matrix4();
+    rotationMatrix.makeRotationAxis( axis.normalize(), radians );
+    rotationMatrix.multiply( object.matrix );                       // pre-multiply
+    object.matrix = rotationMatrix;
+    object.rotation.setFromRotationMatrix(object.matrix);
+}
+var cameraAngle = 0;
+renderer.setSize( window.innerWidth, window.innerHeight );
+document.body.appendChild( renderer.domElement );
+var CAMERA_MOVE = false;
+var timer = function(name) {
+    var start = new Date();
+    return {
+        stop: function() {
+            var end  = new Date();
+            var time = end.getTime() - start.getTime();
+            console.log('Timer:', name, 'finished in', time, 'ms');
+        }
+    }
+};
+var mouse = new THREE.Vector2(), INTERSECTED, SELECTED;
+var raycaster = new THREE.Raycaster();
+var mouseIsDown = false;
+
+var SELECT_COLOR = 0x005555;
+var HOVER_COLOR = 0x555555;
+
+///////////////////////////////////// UTILS
+
+function key(event,keyString) {
+    return event.keyCode == keyString.charCodeAt(0)
+}
+
+function rebuild() {
+    if (SELECTED) {
+        sel_tile = SELECTED.tile_index;
+    }
+    clearAll();
+    buildAll();
+    for (var i = scene.children.length; i-- > 0 ;) {
+        if (scene.children[i].tile_index) {
+            if (scene.children[i].tile_index == sel_tile) {
+                SELECTED = scene.children[i];
+            }
+        }
+    }
+}
+
+function clearAll() {
+    
+    while (scene.children.length > 0) {
+        obj = scene.children[0];
+        scene.remove(obj);
+    }
+}
+
+function saveJSON() {
+    data = { info: { version:"0.1" }, data: tileList }
+    datajson = JSON.stringify(data);
+    var toDownload=new Blob([datajson],{type:'text/text'});
+    var url=window.URL.createObjectURL(toDownload);
+    window.open(url);
+}
+
+function showLoader() {
+    document.getElementById("fileSpan").style.display = "inline";
+}
+
+function hideLoader() {
+    document.getElementById("fileSpan").style.display = "none";
+}
+
+function loadJSON(data) {
+    datajson = JSON.parse(data);
+    if (datajson.info.version == "0.1") {
+        tileList = datajson.data;
+        rebuild();
+    }
+    document.getElementById("fileSpan").style.display = "none";
+}
+
+function flip() {
+    if (SELECTED != null) {
+        tileList[SELECTED.tile_index].flip = !tileList[SELECTED.tile_index].flip;
+    }
+}
+
+
+///////////////////////////////////// EVENT LISTENERS
+
+document.addEventListener( 'mousemove', onDocumentMouseMove, false );
+document.addEventListener( 'wheel', onDocumentMouseWheel, false );
+document.addEventListener( 'mousedown', onDocumentMouseDown, false );
+document.addEventListener( 'mouseup', onDocumentMouseUp, false );
+document.addEventListener( 'contextmenu', function(e){
+    e.preventDefault();
+}, false);
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    var file = fileInput.files[0];
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        loadJSON(reader.result);
+    }
+    reader.readAsText(file);
+});
+
+function keyDown(e) {
+    // camera move
+    if (key(e,"W")) mov_y = mov_speed;
+    if (key(e,"S")) mov_y = -mov_speed;
+    if (key(e,"A")) mov_x = -mov_speed;
+    if (key(e,"D")) mov_x = mov_speed;
+    
+    // rebuild
+    if (key(e,"R")) {
+        var tim = timer('rebuild');
+        clearAll();
+        tim.stop();
+    }
+    
+    if (key(e,"F")) {
+        flip();
+        rebuild();
+    }
+    
+    if (key(e,"P")) {
+        topPeg();
+        rebuild();
+    }
+    
+    // clear selection
+    if (key(e,"C")) {
+        if ( SELECTED ) SELECTED.material.emissive.setHex( 0x000000 );
+        SELECTED = null;
+    }
+    
+    // temp change side tile
+    if (e.keyCode == 37) {
+        if ( SELECTED != null ) {
+            tileList[SELECTED.tile_index].stile -= 1;
+            if (tileList[SELECTED.tile_index].stile < 0) tileList[SELECTED.tile_index].stile = 7;
+        }
+        rebuild();
+    }
+    if (e.keyCode == 39) {
+        if ( SELECTED != null ) tileList[SELECTED.tile_index].stile = (tileList[SELECTED.tile_index].stile + 1) % 8;
+        rebuild();
+    }
+    
+    // offset side
+    if (e.keyCode == 38) {
+        if (SELECTED != null) {
+            if (e.shiftKey) {
+                tileList[SELECTED.tile_index].sideOffset -= 1/64;
+            } else {
+                tileList[SELECTED.tile_index].sideOffset -= 1/16;
+            }
+            rebuild();
+        }
+    }
+    
+    if (e.keyCode == 40) {
+        if (SELECTED != null) {
+            if (e.shiftKey) {
+                tileList[SELECTED.tile_index].sideOffset += 1/64;
+            } else {
+                tileList[SELECTED.tile_index].sideOffset += 1/16;
+            }
+            rebuild();
+        }
+    }
+    
+    // save data
+    if (key(e,"S") && e.ctrlKey && CAMERA_MOVE == false) {
+        saveJSON();
+    }
+    
+    if (key(e,"L") && e.ctrlKey && CAMERA_MOVE == false) {
+        showLoader();
+    }
+}
+
+function keyUp(event) {
+    if (event.keyCode == 87) mov_y = 0;
+    if (event.keyCode == 83) mov_y = 0;
+    if (event.keyCode == 65) mov_x = 0;
+    if (event.keyCode == 68) mov_x = 0;
+}
+
+function onDocumentMouseMove( event ) {
+    var mdx, mdy;
+    mouseLastX = mouse.x;
+    mouseLastY = mouse.y;
+    event.preventDefault();
+    mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+    mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+    
+    mdx = (mouse.x - mouseLastX) * 2;
+    mdy = mouse.y - mouseLastY;
+    
+    if (CAMERA_MOVE) {
+        camera.position.z += mdy * 2;
+        cameraAngle -= mdx;
+        rotateAroundWorldAxis(camera,new THREE.Vector3(0,0,1), -mdx);
+    }
+    
+    
+}
+
+function onDocumentMouseDown( event ) {
+    if (event.which == 1) { // left click, select
+        raycaster.setFromCamera( mouse, camera );
+        var intersects = raycaster.intersectObjects( scene.children );
+        if ( intersects.length > 0 ) {
+            if ( SELECTED != intersects[ 0 ].object ) {
+                if ( SELECTED ) SELECTED.material.emissive.setHex( 0x000000 );
+                SELECTED = intersects[ 0 ].object;
+                SELECTED.material.emissive.setHex( SELECT_COLOR );
+            }
+        } else {
+            if ( SELECTED ) SELECTED.material.emissive.setHex( 0x000000 );
+            SELECTED = null;
+        }
+        mouseIsDown = true;
+    }
+    
+    
+    
+    if (event.which == 3) { // left click, select
+        CAMERA_MOVE = true;
+    }
+}
+
+function onDocumentMouseUp( event ) {
+    if (event.which == 3) { // right click, camera mode
+        CAMERA_MOVE = false;
+    }
+    
+    if (event.which == 1) {
+        mouseIsDown = false;
+    }
+}
+
+function onDocumentMouseWheel( event ) {
+    if (SELECTED != null) {
+        if (event.deltaY != 0) {
+            for (var i = 0; i < 4; i++) tileList[SELECTED.tile_index].zarr[i] += -Math.sign(event.deltaY)/4;
+        }
+    }
+    rebuild();
+}
+
+
+
+///////////////////////////////////////
+
+// stuff here
+
+//var geometry = new THREE.PlaneGeometry( 5, 5, 1 );
+
+var texture = new THREE.TextureLoader().load( "citytiles.png" );
+texture.magFilter = THREE.NearestFilter;
+texture.minFilter = THREE.NearestFilter;
+
+
+var stexture = new THREE.TextureLoader().load( "citystiles.png" );
+stexture.magFilter = THREE.NearestFilter;
+stexture.minFilter = THREE.NearestFilter;
+stexture.wrapS = THREE.RepeatWrapping; 
+stexture.wrapT = THREE.RepeatWrapping;
+
+var tileList = [];
+
+function addTile(x,y,tx,ty,zarr,flip,stile,sideOffset) {
+    var newTile = {}
+    if (!flip) flip = false;
+    if (!zarr) zarr = [0,0,0,0];
+    if (!stile) stile = 0;
+    if (!sideOffset) sideOffset = 0;
+    newTile.x = x;
+    newTile.y = y;
+    newTile.tx = tx;
+    newTile.ty = ty;
+    newTile.zarr = zarr;
+    newTile.flip = flip;
+    newTile.stile = stile;
+    newTile.sideOffset = sideOffset;
+    tileList.push(newTile);
+}
+
+function buildAll() {
+    for (var ti = 0; ti < tileList.length; ti++) {
+        var _t = tileList[ti];
+        buildTile(_t.x,_t.y,_t.tx,_t.ty,_t.zarr,_t.flip,_t.stile,_t.sideOffset,ti);
+    }
+    var ambientLight = new THREE.AmbientLight( 0xFFFFFF );
+    scene.add( ambientLight );
+}
+
+function buildTile(x,y,tx,ty,_zarr,flip,stile,sideOffset,index) {
+    
+    var zarr = _zarr.slice(0);
+    var material = new THREE.MeshLambertMaterial( {map: texture} );
+
+    var smaterial = new THREE.MeshLambertMaterial( {map: stexture} );
+    // top tile
+    
+    var geometry = new THREE.PlaneGeometry( 1, 1 );
+    var tile = [tx,ty];
+    var t = [tile[0],15-tile[1]];
+    var p = 1/16;
+    
+    // tile UVs
+    
+    var uvcoords = [
+        new THREE.Vector2(p*t[0],p*(t[1]+1)),
+        new THREE.Vector2(p*t[0],p*t[1]),
+        new THREE.Vector2(p*(t[0]+1),p*(t[1]+1)),
+        new THREE.Vector2(p*(t[0]+1),p*t[1])
+    ];
+    
+    if (flip) {
+        var nzarr = zarr.slice(0);
+        zarr[1] = nzarr[0];
+        zarr[3] = nzarr[1];
+        zarr[0] = nzarr[2];
+        zarr[2] = nzarr[3];
+        geometry.faceVertexUvs[0][0] = [ uvcoords[1], uvcoords[3], uvcoords[0] ];
+        geometry.faceVertexUvs[0][1] = [ uvcoords[3], uvcoords[2], uvcoords[0] ];
+    } else {
+        geometry.faceVertexUvs[0][0] = [ uvcoords[0], uvcoords[1], uvcoords[2] ];
+        geometry.faceVertexUvs[0][1] = [ uvcoords[1], uvcoords[3], uvcoords[2] ];
+    }
+    
+    for (i=0; i < 4; i++) geometry.vertices[i].z = zarr[i];
+    
+    // add top to scene
+    
+    var plane = new THREE.Mesh( geometry, material );
+    plane.position.x = x;
+    plane.position.y = -y;
+    if (flip) plane.rotateZ(Math.PI / 2);
+    plane.tile_index = index;
+    scene.add( plane );
+    
+    // sides
+    
+    var sgeom = new THREE.Geometry();
+    sgeom.vertices.push(
+        new THREE.Vector3( -.5, -.5, 0 ),           //0  bl?
+        new THREE.Vector3( -.5, -.5, zarr[0] ),
+        new THREE.Vector3( .5, -.5, 0 ),         //2 br?
+        new THREE.Vector3( .5, -.5, zarr[2] ),
+        new THREE.Vector3( -.5, .5, 0 ),         //4 tl? 
+        new THREE.Vector3( -.5, .5, zarr[1] ),
+        new THREE.Vector3( .5, .5, 0 ),       //6 tr?
+        new THREE.Vector3( .5, .5, zarr[3] )
+    );
+    sgeom.faces.push( new THREE.Face3( 1, 0, 2 ) ); //0:2
+    sgeom.faces.push( new THREE.Face3( 1, 2, 3 ) );
+    sgeom.faces.push( new THREE.Face3( 3, 2, 6 ) ); //2:6
+    sgeom.faces.push( new THREE.Face3( 3, 6, 7 ) );
+    sgeom.faces.push( new THREE.Face3( 7, 6, 4 ) ); //6:4
+    sgeom.faces.push( new THREE.Face3( 7, 4, 5 ) );
+    sgeom.faces.push( new THREE.Face3( 5, 4, 0 ) ); //4:0
+    sgeom.faces.push( new THREE.Face3( 5, 0, 1 ) );
+    sgeom.computeBoundingSphere();
+    
+    // side uvs
+    
+    var sp = 1/8;
+    
+    
+    var suva = new THREE.Vector2( (stile+0) * sp, sideOffset ); 
+    var suvb = new THREE.Vector2( (stile+1) * sp, sideOffset );
+    var suv = [
+        new THREE.Vector2( (stile+0) * sp, sideOffset + (zarr[0]/4)),
+        new THREE.Vector2( (stile+1) * sp, sideOffset + (zarr[2]/4)),
+        new THREE.Vector2( (stile+1) * sp, sideOffset + (zarr[1]/4)),
+        new THREE.Vector2( (stile+0) * sp, sideOffset + (zarr[3]/4))
+    ];
+    
+    sgeom.faceVertexUvs[0][0] = [ suv[0], suva, suvb ];
+    sgeom.faceVertexUvs[0][1] = [ suv[0], suvb, suv[1] ];
+    sgeom.faceVertexUvs[0][2] = [ suv[1], suvb, suva ];
+    sgeom.faceVertexUvs[0][3] = [ suv[1], suva, suv[3] ];
+    sgeom.faceVertexUvs[0][4] = [ suv[3], suva, suvb ];
+    sgeom.faceVertexUvs[0][5] = [ suv[3], suvb, suv[2] ];
+    sgeom.faceVertexUvs[0][6] = [ suv[2], suvb, suva ];
+    sgeom.faceVertexUvs[0][7] = [ suv[2], suva, suv[0] ];
+    
+    
+    sgeom.uvsNeedUpdate = true;
+    
+    // add side to scene
+   
+    var sides = new THREE.Mesh( sgeom, smaterial );
+    sides.position.x = x;
+    sides.position.y = -y;
+    if (!flip) sides.rotateZ(-Math.PI / 2);
+    sides.tile_index = index;
+    scene.add(sides);
+    
+    
+}
+
+function test_map() {
+    clearAll();
+    tileList.length = 0;
+    for (var i=0;i<5;i++) {
+        for (var j=0; j< 5; j++) {
+            if (i < 2 || j > 2) {
+                if (i != 0 && j <=2) addTile(i,j,5,6,[0.5,0.5,0.5,0.5]);
+                else if (j != 4 && i >=2) addTile(i,j,4,7,[0.5,0.5,0.5,0.5]);
+                else if (i == 1 && j == 3) addTile(i,j,5,7,[0.5,0.5,0.5,0.5]);
+                else addTile(i,j,4,6,[0.5,0.5,0.5,0.5]);
+            } else {
+                if (j == 2 && i == 3) addTile(i,j,4,6,[2.5,2.5,2.5,2.5],false,1,0.03125);
+                else addTile(i,j,4,6,[2.5,2.5,2.5,2.5],false,2,0.03125);
+                
+            }
+        }
+    }
+    buildAll();
+}
+
+test_map();
+
+//camera.position.z = 10;
+radius = 5;
+elapsedTime = 0;
+constant = 0.02;
+camera.position.z = 5;
+camera.position.x = 0;
+camera.position.y = -10;
+mov_x = 0;
+mov_y = 0;
+mov_speed = 0.2;
+camera.rotation.x = Math.PI/4;
+/////////////////////////////////////// RENDER
+
+function render() {
+	requestAnimationFrame( render );
+    elapsedTime += 1;
+    
+    if (CAMERA_MOVE) {
+        camera.position.x += mov_x * Math.cos(cameraAngle);
+        camera.position.y += mov_x * Math.sin(cameraAngle);
+        
+        camera.position.y += mov_y * Math.cos(cameraAngle);
+        camera.position.x -= mov_y * Math.sin(cameraAngle);
+        
+        
+    }
+    //camera.lookAt( new THREE.Vector3(radius/2,-radius/2,0) );
+
+    
+    
+    // find intersections
+
+    raycaster.setFromCamera( mouse, camera );
+
+    var intersects = raycaster.intersectObjects( scene.children );
+
+    if ( intersects.length > 0 ) {
+
+        if ( INTERSECTED != intersects[ 0 ].object ) {
+
+            if ( INTERSECTED ) INTERSECTED.material.emissive.setHex( 0x000000 );
+
+            INTERSECTED = intersects[ 0 ].object;
+            
+
+        }
+
+    } else {
+
+        if ( INTERSECTED ) INTERSECTED.material.emissive.setHex( 0x000000 );
+
+        INTERSECTED = null;
+
+    }
+    
+    if (INTERSECTED) INTERSECTED.material.emissive.setHex( HOVER_COLOR );
+    if (SELECTED) {
+        SELECTED.material.emissive.setHex( SELECT_COLOR );
+        if (INTERSECTED) {
+            if (INTERSECTED == SELECTED) INTERSECTED.material.emissive.setHex( HOVER_COLOR + SELECT_COLOR );
+        }
+    }
+    
+
+
+	renderer.render( scene, camera );
+}
+render();
+
+
+</script></body></html>
